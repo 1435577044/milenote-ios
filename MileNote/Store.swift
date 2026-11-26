@@ -268,88 +268,97 @@ class GarageStore: ObservableObject {
     // MARK: 演示数据
 
     static func demoGarage() -> Garage {
-        var car = Ledger(vehicle: Vehicle(
-            name: "我的爱车",
-            plate: "粤A·12345",
-            model: "示例车型",
-            startKm: 12000,
-            currentKm: 18600,
-            fuelGrade: "92#",
-            companionDate: "2024-01-01",
-            powertrain: "fuel"
-        ))
-
         let calendar = Calendar.current
         let now = Date()
-        var records: [Record] = []
-        for monthOffset in stride(from: 5, through: 0, by: -1) {
-            guard let date = calendar.date(byAdding: .month, value: -monthOffset, to: now) else { continue }
-            let formatter = DateFormatter()
-            formatter.dateFormat = "yyyy-MM"
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            let month = formatter.string(from: date)
-            let base = 12000 + (5 - monthOffset) * 1100
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
 
-            var fuel = Record()
-            fuel.date = "\(month)-08"
-            fuel.category = "油费"
-            fuel.amount = 380
-            fuel.odometer = Double(base + 400)
-            fuel.liters = 42.5
-            fuel.full = true
-            fuel.location = "示例加油站"
-            fuel.note = "演示数据"
-            records.append(fuel)
+        func makeCar(name: String, plate: String, model: String, powertrain: String,
+                     startKm: Double, currentKm: Double, count: Int, grade: String?) -> Ledger {
+            var car = Ledger(vehicle: Vehicle(
+                name: name,
+                plate: plate,
+                model: model,
+                startKm: startKm,
+                currentKm: currentKm,
+                fuelGrade: grade,
+                companionDate: "2024-01-01",
+                powertrain: powertrain
+            ))
+            let step = (currentKm - startKm) / Double(max(1, count))
+            var records: [Record] = []
+            for i in 0..<count {
+                guard let date = calendar.date(byAdding: .day, value: -((count - i) * 2), to: now) else { continue }
+                var record = Record()
+                record.date = formatter.string(from: date)
+                record.odometer = startKm + step * Double(i + 1)
+                record.source = "演示数据"
 
-            var parking = Record()
-            parking.date = "\(month)-15"
-            parking.category = "停车费"
-            parking.amount = 45
-            parking.odometer = Double(base + 600)
-            parking.note = "演示数据"
-            records.append(parking)
+                let roll = i % 10
+                if powertrain == "ev" {
+                    record.category = roll < 6 ? "充电费" : (roll == 6 ? "停车费" : (roll == 7 ? "保险" : (roll == 8 ? "保养" : "过路费")))
+                } else if powertrain == "phev" {
+                    record.category = roll < 4 ? "油费" : (roll < 7 ? "充电费" : (roll == 7 ? "停车费" : "过路费"))
+                } else {
+                    record.category = roll < 6 ? "油费" : (roll == 6 ? "停车费" : (roll == 7 ? "保险" : (roll == 8 ? "保养" : "过路费")))
+                }
 
-            var service = Record()
-            service.date = "\(month)-22"
-            service.category = monthOffset == 3 ? "保养" : "过路费"
-            service.amount = monthOffset == 3 ? 460 : 120
-            service.odometer = Double(base + 900)
-            service.note = "演示数据"
-            records.append(service)
+                switch Categories.normalize(record.category) {
+                case "油费":
+                    record.amount = 280 + Double(i % 7) * 18
+                    record.liters = record.amount / 7.6
+                    record.unitPrice = 7.6
+                    record.full = i % 4 == 0
+                    record.fuelGrade = grade
+                    record.location = "示例加油站"
+                case "充电费":
+                    record.amount = 60 + Double(i % 5) * 12
+                    record.kwh = record.amount / 1.25
+                    record.unitPrice = 1.25
+                    record.full = i % 5 == 0
+                    record.location = "示例充电站"
+                case "保险":
+                    record.amount = 3200
+                case "保养":
+                    record.amount = 460
+                case "停车费":
+                    record.amount = 35 + Double(i % 4) * 10
+                default:
+                    record.amount = 90 + Double(i % 5) * 15
+                }
+                if i % 13 == 0 { record.note = "演示数据" }
+                records.append(record)
+            }
+            car.records = records
+
+            let reminderTitles = ["空调滤芯", "洗车", "冷却液", "制动液", "机油机滤"]
+            for (index, title) in reminderTitles.enumerated() {
+                var reminder = Reminder()
+                reminder.title = title
+                reminder.baseDate = formatter.string(from: calendar.date(byAdding: .month, value: -6 - index, to: now) ?? now)
+                reminder.baseKm = max(0, currentKm - Double(4000 + index * 1500))
+                reminder.intervalKm = 10000
+                reminder.intervalMonths = 12
+                reminder.projects = [title]
+                reminder.source = "默认保养方案"
+                car.reminders.append(reminder)
+            }
+            return car
         }
-        car.records = records.sorted { $0.date < $1.date }
 
-        var insurance = Record()
-        insurance.date = "\(calendar.component(.year, from: now))-03-12"
-        insurance.category = "保险"
-        insurance.amount = 3200
-        insurance.odometer = 15000
-        insurance.note = "演示数据"
-        car.records.append(insurance)
-        car.records.sort { $0.date < $1.date }
-
-        var oilReminder = Reminder()
-        oilReminder.title = "更换机油机滤"
-        oilReminder.baseDate = "2025-12-20"
-        oilReminder.baseKm = 17000
-        oilReminder.intervalKm = 8000
-        oilReminder.intervalMonths = 12
-        oilReminder.projects = ["机油", "机滤"]
-        oilReminder.source = "默认保养方案"
-
-        var airReminder = Reminder()
-        airReminder.title = "更换空气滤芯"
-        airReminder.baseDate = "2025-06-15"
-        airReminder.baseKm = 14000
-        airReminder.intervalKm = 20000
-        airReminder.intervalMonths = 24
-        airReminder.source = "默认保养方案"
-
-        car.reminders = [oilReminder, airReminder]
-
+        let cars = [
+            makeCar(name: "周末出逃计划", plate: "A号车", model: "远峰 · T1.4T", powertrain: "fuel",
+                    startKm: 12000, currentKm: 24659, count: 132, grade: "95#"),
+            makeCar(name: "插混通勤", plate: "B号车", model: "插混 · 增程", powertrain: "phev",
+                    startKm: 11000, currentKm: 23538, count: 155, grade: "92#"),
+            makeCar(name: "城市通勤", plate: "C号车", model: "纯电 · 长续航", powertrain: "ev",
+                    startKm: 10000, currentKm: 20176, count: 154, grade: nil),
+        ]
         var garage = Garage()
-        garage.cars = [car]
-        garage.activeId = car.id
+        garage.cars = cars
+        garage.activeId = cars.first?.id ?? ""
         return garage
     }
+
 }

@@ -207,6 +207,8 @@ struct Vehicle: Codable {
     }
 
     var isElectric: Bool { powertrain == "ev" }
+    var isPhev: Bool { powertrain == "phev" }
+    var usesEnergyUI: Bool { isElectric || isPhev }
 }
 
 struct Record: Codable, Identifiable {

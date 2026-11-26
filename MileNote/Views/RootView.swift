@@ -1,135 +1,249 @@
 import SwiftUI
 
-struct RootView: View {
-    @EnvironmentObject var store: GarageStore
+enum MNPage: Identifiable {
+    case records
+    case fuelDetail
+    case serviceHistory
+    case report
+    case garageOverview
+    case settings
+    case webdav
 
-    private var accent: Color {
-        let palette = Categories.palettes[store.garage.theme] ?? Categories.palettes["blue"]!
-        return Color(hex: palette[0])
-    }
-
-    var body: some View {
-        TabView {
-            DashboardView()
-                .tabItem { Label("概览", systemImage: "chart.bar.fill") }
-            RecordsView()
-                .tabItem { Label("记录", systemImage: "list.bullet.rectangle") }
-            EnergyView()
-                .tabItem { Label("能耗", systemImage: "fuelpump") }
-            MaintenanceView()
-                .tabItem { Label("保养", systemImage: "wrench.and.screwdriver") }
-            SettingsView()
-                .tabItem { Label("我的", systemImage: "gearshape") }
+    var id: String {
+        switch self {
+        case .records: return "records"
+        case .fuelDetail: return "fuelDetail"
+        case .serviceHistory: return "serviceHistory"
+        case .report: return "report"
+        case .garageOverview: return "garageOverview"
+        case .settings: return "settings"
+        case .webdav: return "webdav"
         }
-        .accentColor(accent)
     }
 }
 
-struct DashboardView: View {
+struct RootView: View {
     @EnvironmentObject var store: GarageStore
+    @State private var selection = 0
+    @State private var pushed: MNPage? = nil
+    @State private var showEditor = false
+    @State private var showVehicleSwitcher = false
 
-    private var car: Ledger? { store.activeCar }
-    private var theme: String { store.garage.theme }
+    private var energyTabTitle: String {
+        (store.activeCar?.vehicle.usesEnergyUI ?? false) ? "能耗" : "油耗"
+    }
 
     var body: some View {
-        NavigationView {
+        ZStack(alignment: .bottom) {
+            MN.surface.ignoresSafeArea()
+
             Group {
-                if let car = car {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            carPicker
-
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                                StatCard(
-                                    title: "总支出",
-                                    value: moneyText(totalAmount(car.records)),
-                                    caption: "\(car.records.count) 条记录",
-                                    tint: categoryColor("油费", theme: theme)
-                                )
-                                StatCard(
-                                    title: "本月支出",
-                                    value: moneyText(monthlyTotals(car.records, limit: 1).first?.amount ?? 0),
-                                    caption: String(todayString().prefix(7)),
-                                    tint: categoryColor("保养", theme: theme)
-                                )
-                                StatCard(
-                                    title: "当前里程",
-                                    value: numberText(car.vehicle.currentKm) + " km",
-                                    caption: car.vehicle.plate.isEmpty ? "未填写车牌" : car.vehicle.plate,
-                                    tint: categoryColor("保险", theme: theme)
-                                )
-                                StatCard(
-                                    title: car.vehicle.isElectric ? "平均电耗" : "平均油耗",
-                                    value: averageText(car),
-                                    caption: car.vehicle.isElectric ? "kWh/100km" : "L/100km",
-                                    tint: categoryColor("过路费", theme: theme)
-                                )
-                            }
-
-                            SectionCard(title: "近 6 个月支出") {
-                                let months = monthlyTotals(car.records)
-                                if months.isEmpty {
-                                    EmptyState(text: "还没有记录，去「记录」添加第一笔吧")
-                                } else {
-                                    VerticalBarChart(items: months.map { month in
-                                        (shortDate(month.month + "-01"), month.amount, categoryColor("油费", theme: theme))
-                                    })
-                                }
-                            }
-
-                            SectionCard(title: "费用构成") {
-                                let totals = categoryTotals(car.records)
-                                if totals.isEmpty {
-                                    EmptyState(text: "暂无分类数据")
-                                } else {
-                                    HorizontalBars(items: totals, theme: theme)
-                                }
-                            }
-                        }
-                        .padding()
-                    }
-                } else {
-                    EmptyState(text: "还没有车辆，去「我的」添加一辆车")
+                switch selection {
+                case 0: DashboardView(onNavigate: { pushed = $0 })
+                case 1: FuelView(onNavigate: { pushed = $0 })
+                case 2: MaintenanceView(onNavigate: { pushed = $0 })
+                default: MineView(onNavigate: { pushed = $0 })
                 }
             }
-            .navigationTitle("里程志")
+            .padding(.bottom, 76)
+
+            bottomBar
         }
-        .navigationViewStyle(.stack)
+        .sheet(isPresented: $showVehicleSwitcher) {
+            VehicleSwitcherView()
+                .environmentObject(store)
+        }
+        .sheet(isPresented: $showEditor) {
+            RecordEditorView(record: Record(), isNew: true)
+                .environmentObject(store)
+        }
+        .fullScreenCover(item: $pushed) { page in
+            pushedView(page)
+                .environmentObject(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mnShowVehicleSwitcher)) { _ in
+            showVehicleSwitcher = true
+        }
     }
 
-    private var carPicker: some View {
-        Menu {
-            ForEach(store.garage.cars) { item in
+    @ViewBuilder
+    private func pushedView(_ page: MNPage) -> some View {
+        switch page {
+        case .records: RecordsView()
+        case .fuelDetail: FuelDetailView()
+        case .serviceHistory: ServiceHistoryView()
+        case .report: ReportView()
+        case .garageOverview: GarageOverviewView()
+        case .settings: SettingsView()
+        case .webdav: WebDAVSettingsView()
+        }
+    }
+
+    private var bottomBar: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(MN.outlineVariant.opacity(0.55))
+                .frame(height: 0.5)
+            HStack(spacing: 0) {
+                tabItem(index: 0, title: "总览", icon: "house", filled: "house.fill")
+                tabItem(index: 1, title: energyTabTitle, icon: "fuelpump", filled: "fuelpump.fill")
+
                 Button {
-                    store.setActiveVehicle(item.id)
+                    showEditor = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(width: 56, height: 40)
+                        .background(MN.primary)
+                        .cornerRadius(14)
+                }
+                .frame(maxWidth: .infinity)
+
+                tabItem(index: 2, title: "保养", icon: "wrench", filled: "wrench.fill")
+                tabItem(index: 3, title: "我的", icon: "person", filled: "person.fill")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.white)
+        }
+        .frame(height: 76)
+    }
+
+    @ViewBuilder
+    private func tabItem(index: Int, title: String, icon: String, filled: String) -> some View {
+        Button {
+            selection = index
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: selection == index ? filled : icon)
+                    .font(.system(size: 22))
+                    .foregroundColor(selection == index ? MN.onSurface : MN.secondary)
+                Text(title)
+                    .font(.system(size: 10))
+                    .foregroundColor(selection == index ? MN.onSurface : MN.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+        }
+    }
+}
+
+// MARK: - 四个主 Tab 通用顶栏
+
+struct MNTopBar: View {
+    @EnvironmentObject var store: GarageStore
+    let title: String
+    var actionIcon: String? = nil
+    var action: (() -> Void)? = nil
+    var showVehicle: Bool = true
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(MN.onSurface)
+            Spacer(minLength: 4)
+            if showVehicle, let vehicle = store.activeCar?.vehicle {
+                Button {
+                    NotificationCenter.default.post(name: .mnShowVehicleSwitcher, object: nil)
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: vehicle.isElectric ? "bolt.car.fill" : "fuelpump.fill")
+                        Text(vehicle.name.isEmpty ? "未命名车辆" : vehicle.name)
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(MN.onSurface)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.white)
+                    .cornerRadius(18)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 18)
+                            .stroke(MN.outlineVariant, lineWidth: 0.8)
+                    )
+                }
+            }
+            if let actionIcon = actionIcon, let action = action {
+                Button(action: action) {
+                    Image(systemName: actionIcon)
+                        .font(.system(size: 20))
+                        .foregroundColor(MN.onSurface)
+                        .frame(width: 32, height: 32)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(MN.surface)
+    }
+}
+
+extension Notification.Name {
+    static let mnShowVehicleSwitcher = Notification.Name("mnShowVehicleSwitcher")
+}
+
+struct VehicleSwitcherView: View {
+    @EnvironmentObject var store: GarageStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("切换车辆")
+                .font(.system(size: 24, weight: .semibold))
+            ForEach(store.garage.cars) { car in
+                Button {
+                    store.setActiveVehicle(car.id)
+                    dismiss()
                 } label: {
                     HStack {
-                        Text(item.vehicle.name.isEmpty ? "未命名车辆" : item.vehicle.name)
-                        if item.id == store.garage.activeId {
-                            Image(systemName: "checkmark")
-                        }
+                        Text((car.id == store.garage.activeId ? "✓ " : "") + (car.vehicle.name.isEmpty ? "未命名车辆" : car.vehicle.name))
+                        Spacer()
+                        Text("\(car.records.count) 条记录")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
+                    .padding(.vertical, 10)
                 }
             }
-        } label: {
-            HStack {
-                Image(systemName: "car.fill")
-                Text(car?.vehicle.name.isEmpty == false ? car!.vehicle.name : "选择车辆")
-                Spacer()
-                Image(systemName: "chevron.down")
-            }
-            .font(.subheadline.weight(.medium))
-            .padding(12)
-            .background(Color(.secondarySystemBackground))
-            .cornerRadius(12)
+            Spacer()
         }
-        .buttonStyle(.plain)
+        .padding(24)
     }
+}
 
-    private func averageText(_ car: Ledger) -> String {
-        let kind: EnergyKind = car.vehicle.isElectric ? .electric : .fuel
-        let intervals = energyIntervals(car.records, kind: kind) + manualEnergyIntervals(car.records)
-        guard let rate = averageRate(intervals) else { return "—" }
-        return numberText(rate, digits: 1)
+// MARK: - 推入页通用顶栏
+
+struct MNDetailTopBar: View {
+    let title: String
+    var actionIcon: String? = nil
+    var action: (() -> Void)? = nil
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { dismiss() } label: {
+                Image(systemName: "arrow.left")
+                    .font(.system(size: 20))
+                    .foregroundColor(MN.onSurface)
+                    .frame(width: 36, height: 36)
+            }
+            Text(title)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundColor(MN.onSurface)
+            Spacer()
+            if let actionIcon = actionIcon, let action = action {
+                Button(action: action) {
+                    Image(systemName: actionIcon)
+                        .font(.system(size: 20))
+                        .foregroundColor(MN.onSurface)
+                        .frame(width: 36, height: 36)
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(MN.surface)
     }
 }

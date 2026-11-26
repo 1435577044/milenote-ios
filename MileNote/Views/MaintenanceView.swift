@@ -1,245 +1,272 @@
 import SwiftUI
 
+private struct ReminderInfo {
+    let status: String
+    let detail: String
+    let progress: Double
+    let color: Color
+    let overdue: Bool
+}
+
 struct MaintenanceView: View {
     @EnvironmentObject var store: GarageStore
+    var onNavigate: (MNPage) -> Void
 
     @State private var showEditor = false
     @State private var draft = Reminder()
 
     private var car: Ledger? { store.activeCar }
-    private var theme: String { store.garage.theme }
 
-    private var serviceHistory: [Record] {
-        (car?.records ?? [])
+    private var reminders: [Reminder] {
+        (car?.reminders ?? []).sorted { lhs, rhs in
+            let l = info(for: lhs).overdue ? 0 : 1
+            let r = info(for: rhs).overdue ? 0 : 1
+            if l != r { return l < r }
+            return (lhs.dueDate ?? "9999") < (rhs.dueDate ?? "9999")
+        }
+    }
+
+    private var overdueCount: Int { reminders.filter { info(for: $0).overdue }.count }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                MNTopBar(title: "保养", actionIcon: "wrench.and.screwdriver") { onNavigate(.serviceHistory) }
+
+                if let car = car {
+                    MNCard {
+                        MNSectionHeader(
+                            title: "待办事项",
+                            subtitle: "共 \(car.reminders.count) 项 · \(overdueCount) 项已到期",
+                            actionTitle: "添加提醒"
+                        ) {
+                            draft = Reminder()
+                            draft.baseDate = todayString()
+                            draft.baseKm = car.vehicle.currentKm
+                            showEditor = true
+                        }
+
+                        if reminders.isEmpty {
+                            MNEmptyState(text: "还没有提醒，点「添加提醒」创建")
+                        } else {
+                            ForEach(reminders.indices, id: \.self) { index in
+                                reminderRow(reminders[index], car: car)
+                                if index < reminders.count - 1 { Divider() }
+                            }
+                        }
+                    }
+
+                    MNCard {
+                        MNSectionHeader(title: "保养计划", actionTitle: "编辑计划") {
+                            onNavigate(.settings)
+                        }
+                        Text("默认项目：机油机滤、空气滤芯、空调滤芯、冷却液、制动液、洗车")
+                            .font(.system(size: 13))
+                            .foregroundColor(MN.secondary)
+                    }
+                } else {
+                    MNEmptyState(text: "还没有车辆")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 24)
+        }
+        .background(MN.surface)
+        .sheet(isPresented: $showEditor) {
+            ReminderEditorView(reminder: draft)
+                .environmentObject(store)
+        }
+    }
+
+    @ViewBuilder
+    private func reminderRow(_ reminder: Reminder, car: Ledger) -> some View {
+        let info = info(for: reminder)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(reminder.title.isEmpty ? "保养提醒" : reminder.title)
+                    .font(.system(size: 16, weight: .medium))
+                Spacer()
+                Button {
+                    recordService(reminder, car: car)
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "checkmark")
+                        Text("记录保养")
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(MN.primary)
+                }
+            }
+            HStack(spacing: 5) {
+                Circle().fill(info.color).frame(width: 6, height: 6)
+                Text(info.status)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(info.color)
+            }
+            Text(info.detail)
+                .font(.system(size: 12))
+                .foregroundColor(MN.secondary)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color(hex: "E5E9EB"))
+                    Capsule().fill(info.color)
+                        .frame(width: geo.size.width * CGFloat(min(1, max(0, info.progress))))
+                }
+            }
+            .frame(height: 5)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            draft = reminder
+            showEditor = true
+        }
+    }
+
+    private func info(for reminder: Reminder) -> ReminderInfo {
+        guard let car = car else {
+            return ReminderInfo(status: "计划中", detail: "", progress: 0, color: MN.primary, overdue: false)
+        }
+        let today = todayString()
+        var dueKm = reminder.dueKm
+        var dueDate = reminder.dueDate
+
+        if dueKm == nil, let interval = reminder.intervalKm {
+            let base = reminder.baseKm ?? car.vehicle.currentKm
+            dueKm = base + interval
+        }
+        if (dueDate == nil || dueDate?.isEmpty == true), let months = reminder.intervalMonths {
+            dueDate = addMonths(to: reminder.baseDate ?? today, months: months)
+        }
+
+        var overdue = false
+        var dueSoon = false
+        var status = "计划中"
+        var statusColor = MN.primary
+
+        if let km = dueKm {
+            let remaining = km - car.vehicle.currentKm
+            if remaining <= 0 {
+                overdue = true
+                status = "已到期 · 超出 \(Int(abs(remaining))) 公里"
+                statusColor = MN.danger
+            } else if remaining <= 1000 {
+                dueSoon = true
+                status = "即将到期 · 还有 \(Int(remaining)) 公里"
+                statusColor = MN.warning
+            }
+        }
+        if let date = dueDate, !date.isEmpty, let days = daysBetween(today, date) {
+            if days <= 0 {
+                overdue = true
+                status = "已到期"
+                statusColor = MN.danger
+            } else if days <= 30 {
+                if !overdue {
+                    dueSoon = true
+                    status = "即将到期 · 还有 \(days) 天"
+                    statusColor = MN.warning
+                }
+            }
+        }
+        if reminder.done {
+            overdue = false
+            status = "已完成"
+            statusColor = MN.success
+        }
+
+        var detailParts: [String] = []
+        if let date = dueDate, !date.isEmpty {
+            detailParts.append("到期 \(displayDots(date))")
+        }
+        if let km = dueKm {
+            detailParts.append("\(Int(km)) 公里")
+        }
+        if let days = dueDate.flatMap({ daysBetween(today, $0) }), days > 0, !overdue {
+            detailParts.append("还有 \(days) 天")
+        }
+
+        var progress: Double = 0
+        if let km = dueKm, let base = reminder.baseKm, km > base {
+            progress = (car.vehicle.currentKm - base) / (km - base)
+        } else if let date = dueDate, let baseDate = reminder.baseDate,
+                  let total = daysBetween(baseDate, date), total > 0,
+                  let elapsed = daysBetween(baseDate, today) {
+            progress = Double(elapsed) / Double(total)
+        }
+
+        return ReminderInfo(
+            status: status,
+            detail: detailParts.joined(separator: " · "),
+            progress: progress,
+            color: statusColor,
+            overdue: overdue || dueSoon && !reminder.done
+        )
+    }
+
+    private func displayDots(_ date: String) -> String {
+        guard date.count >= 10 else { return date }
+        return date.replacingOccurrences(of: "-", with: ".")
+    }
+
+    private func recordService(_ reminder: Reminder, car: Ledger) {
+        var record = Record()
+        record.date = todayString()
+        record.category = "保养"
+        record.amount = 0
+        record.odometer = car.vehicle.currentKm
+        record.note = reminder.title
+        record.source = "保养提醒"
+        store.upsertRecord(record)
+        var updated = reminder
+        updated.done = true
+        updated.completedDate = todayString()
+        updated.completedKm = car.vehicle.currentKm
+        updated.recordId = record.id
+        store.upsertReminder(updated)
+    }
+}
+
+struct ServiceHistoryView: View {
+    @EnvironmentObject var store: GarageStore
+
+    private var records: [Record] {
+        (store.activeCar?.records ?? [])
             .filter { ["保养", "维修"].contains(Categories.normalize($0.category)) }
             .sorted { $0.date > $1.date }
     }
 
     var body: some View {
-        NavigationView {
-            Group {
-                if let car = car {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            SectionCard(title: "保养提醒") {
-                                if car.reminders.isEmpty {
-                                    EmptyState(text: "还没有提醒，点右上角添加")
-                                } else {
-                                    ForEach(car.reminders) { reminder in
-                                        let state = reminderState(reminder, car: car)
-                                        HStack(spacing: 10) {
-                                            Image(systemName: state == .done ? "checkmark.circle.fill" : (state == .overdue ? "exclamationmark.triangle.fill" : "clock.circle"))
-                                                .foregroundColor(stateColor(state))
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(reminder.title)
-                                                    .font(.subheadline.weight(.medium))
-                                                Text(detailText(reminder, car: car))
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                            }
-                                            Spacer()
-                                            VStack(alignment: .trailing, spacing: 4) {
-                                                Text(state.label)
-                                                    .font(.caption.weight(.medium))
-                                                    .foregroundColor(stateColor(state))
-                                                Button(state == .done ? "重置" : "完成") {
-                                                    store.toggleReminder(reminder)
-                                                }
-                                                .font(.caption)
-                                                .buttonStyle(.bordered)
-                                            }
-                                        }
-                                        .padding(.vertical, 6)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            draft = reminder
-                                            showEditor = true
-                                        }
-                                        Divider()
-                                    }
+        ScrollView {
+            VStack(spacing: 16) {
+                MNDetailTopBar(title: "维修保养记录")
+                MNCard {
+                    if records.isEmpty {
+                        MNEmptyState(text: "暂无保养维修记录")
+                    } else {
+                        ForEach(records.indices, id: \.self) { index in
+                            let record = records[index]
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(Categories.normalize(record.category))
+                                        .font(.system(size: 15, weight: .medium))
+                                    Text(record.date + (record.note.isEmpty ? "" : " · \(record.note)"))
+                                        .font(.system(size: 12))
+                                        .foregroundColor(MN.secondary)
                                 }
+                                Spacer()
+                                Text(moneyText(record.amount))
+                                    .font(.system(size: 15, weight: .semibold))
                             }
-
-                            SectionCard(title: "保养 / 维修记录") {
-                                if serviceHistory.isEmpty {
-                                    EmptyState(text: "暂无保养维修记录")
-                                } else {
-                                    ForEach(serviceHistory.prefix(12)) { record in
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 3) {
-                                                Text(Categories.normalize(record.category))
-                                                    .font(.subheadline)
-                                                Text(record.date + (record.note.isEmpty ? "" : " · \(record.note)"))
-                                                    .font(.caption)
-                                                    .foregroundColor(.secondary)
-                                                    .lineLimit(1)
-                                            }
-                                            Spacer()
-                                            Text(moneyText(record.amount))
-                                                .font(.subheadline.weight(.medium))
-                                        }
-                                        .padding(.vertical, 4)
-                                        Divider()
-                                    }
-                                }
-                            }
-                        }
-                        .padding()
-                    }
-                } else {
-                    EmptyState(text: "还没有车辆")
-                }
-            }
-            .navigationTitle("保养")
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        draft = Reminder()
-                        draft.baseDate = todayString()
-                        draft.baseKm = store.activeCar?.vehicle.currentKm ?? 0
-                        showEditor = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $showEditor) {
-                ReminderEditorView(reminder: draft)
-                    .environmentObject(store)
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
-
-    private func stateColor(_ state: ReminderState) -> Color {
-        switch state {
-        case .done: return .green
-        case .overdue: return .red
-        case .dueSoon: return .orange
-        case .normal: return categoryColor("保养", theme: theme)
-        }
-    }
-
-    private func detailText(_ reminder: Reminder, car: Ledger) -> String {
-        var parts: [String] = []
-        if let km = reminder.dueKm {
-            parts.append("到期 \(numberText(km)) km")
-        } else if let interval = reminder.intervalKm {
-            parts.append("每 \(numberText(interval)) km")
-        }
-        if let date = reminder.dueDate, !date.isEmpty {
-            parts.append("到期 \(date)")
-        } else if let months = reminder.intervalMonths {
-            parts.append("每 \(months) 个月")
-        }
-        return parts.isEmpty ? "自定义提醒" : parts.joined(separator: " · ")
-    }
-}
-
-struct ReminderEditorView: View {
-    @EnvironmentObject var store: GarageStore
-    @Environment(\.dismiss) private var dismiss
-
-    let reminder: Reminder
-
-    @State private var title: String
-    @State private var intervalKm: String
-    @State private var intervalMonths: String
-    @State private var baseDate: Date
-    @State private var baseKm: String
-    @State private var showDelete = false
-
-    init(reminder: Reminder) {
-        self.reminder = reminder
-        _title = State(initialValue: reminder.title)
-        _intervalKm = State(initialValue: reminder.intervalKm.map { numberText($0) } ?? "")
-        _intervalMonths = State(initialValue: reminder.intervalMonths.map { String($0) } ?? "")
-        _baseDate = State(initialValue: Self.dateFromString(reminder.baseDate ?? todayString()))
-        _baseKm = State(initialValue: reminder.baseKm.map { numberText($0) } ?? "")
-    }
-
-    private var isNew: Bool { reminder.id.isEmpty || !containsReminder }
-
-    private var containsReminder: Bool {
-        store.activeCar?.reminders.contains { $0.id == reminder.id } ?? false
-    }
-
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("提醒事项") {
-                    TextField("名称，例如：更换机油", text: $title)
-                    TextField("里程周期（km，可空）", text: $intervalKm)
-                        .keyboardType(.decimalPad)
-                    TextField("时间周期（月，可空）", text: $intervalMonths)
-                        .keyboardType(.numberPad)
-                }
-                Section("本轮基准") {
-                    DatePicker("基准日期", selection: $baseDate, displayedComponents: .date)
-                    TextField("基准里程（km）", text: $baseKm)
-                        .keyboardType(.decimalPad)
-                }
-                if !isNew {
-                    Section {
-                        Button(role: .destructive) { showDelete = true } label: {
-                            Text("删除提醒")
+                            .padding(.vertical, 8)
+                            if index < records.count - 1 { Divider() }
                         }
                     }
                 }
             }
-            .navigationTitle(isNew ? "新建提醒" : "编辑提醒")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("保存") { save() }
-                }
-            }
-            .alert("确认删除？", isPresented: $showDelete) {
-                Button("删除", role: .destructive) {
-                    store.deleteReminder(reminder.id)
-                    dismiss()
-                }
-                Button("取消", role: .cancel) {}
-            }
+            .padding(16)
         }
-        .navigationViewStyle(.stack)
-    }
-
-    private func save() {
-        let km = Double(intervalKm)
-        let months = Int(intervalMonths)
-        let kmValue = Double(baseKm) ?? 0
-        let dateValue = Self.stringFromDate(baseDate)
-
-        var saved = reminder
-        if saved.id.isEmpty { saved.id = UUID().uuidString }
-        saved.title = title.isEmpty ? "保养提醒" : title
-        saved.intervalKm = (km ?? 0) > 0 ? km : nil
-        saved.intervalMonths = (months ?? 0) > 0 ? months : nil
-        saved.baseKm = kmValue
-        saved.baseDate = dateValue
-        saved.done = false
-        saved.dueKm = (km ?? 0) > 0 ? kmValue + km! : nil
-        saved.dueDate = (months ?? 0) > 0 ? addMonths(to: dateValue, months: months!) : nil
-        saved.source = "自定义提醒"
-        store.upsertReminder(saved)
-        dismiss()
-    }
-
-    private static func dateFromString(_ text: String) -> Date {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter.date(from: text) ?? Date()
-    }
-
-    private static func stringFromDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter.string(from: date)
+        .background(MN.surface)
     }
 }

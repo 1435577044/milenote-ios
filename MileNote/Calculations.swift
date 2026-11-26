@@ -19,7 +19,8 @@ enum Categories {
     }
 
     static func isEnergy(_ category: String?) -> Bool {
-        normalize(category) == "油费"
+        let name = normalize(category)
+        return name == "油费" || name == "充电费"
     }
 
     static func options(for ledger: Ledger) -> [String] {
@@ -170,6 +171,11 @@ func monthlyTotals(_ records: [Record], limit: Int = 6) -> [MonthlyTotal] {
 
 func totalAmount(_ records: [Record]) -> Double {
     records.reduce(0) { $0 + $1.amount }
+}
+
+/// 与 Android 版一致：收入/退款不计入支出。
+func costOf(_ records: [Record]) -> Double {
+    records.filter { $0.kind == "expense" }.reduce(0) { $0 + $1.amount }
 }
 
 func averageRate(_ intervals: [EnergyInterval]) -> Double? {
