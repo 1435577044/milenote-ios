@@ -1,0 +1,7 @@
+.build/
+Payload/
+*.ipa
+*.ipa.sha256
+MileNote.xcodeproj/
+*.xcuserdata
+.DS_Store
