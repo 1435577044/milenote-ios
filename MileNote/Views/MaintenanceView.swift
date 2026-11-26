@@ -228,6 +228,110 @@ struct MaintenanceView: View {
     }
 }
 
+struct ReminderEditorView: View {
+    @EnvironmentObject var store: GarageStore
+    @Environment(\.dismiss) private var dismiss
+
+    let reminder: Reminder
+
+    @State private var title: String
+    @State private var intervalKm: String
+    @State private var intervalMonths: String
+    @State private var baseDate: String
+    @State private var baseKm: String
+    @State private var showDelete = false
+
+    init(reminder: Reminder) {
+        self.reminder = reminder
+        _title = State(initialValue: reminder.title)
+        _intervalKm = State(initialValue: reminder.intervalKm.map { String(format: "%.0f", $0) } ?? "")
+        _intervalMonths = State(initialValue: reminder.intervalMonths.map { String($0) } ?? "")
+        _baseDate = State(initialValue: reminder.baseDate ?? todayString())
+        _baseKm = State(initialValue: reminder.baseKm.map { String(format: "%.0f", $0) } ?? "")
+    }
+
+    private var isNew: Bool {
+        !(store.activeCar?.reminders.contains(where: { $0.id == reminder.id }) ?? false)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            MNDetailTopBar(title: isNew ? "新建提醒" : "编辑提醒")
+            ScrollView {
+                MNCard {
+                    MNEditorField(label: "名称") { TextField("例如：更换机油", text: $title) }
+                    MNEditorField(label: "里程周期（km，可空）") {
+                        TextField("0", text: $intervalKm).keyboardType(.decimalPad)
+                    }
+                    MNEditorField(label: "时间周期（月，可空）") {
+                        TextField("0", text: $intervalMonths).keyboardType(.numberPad)
+                    }
+                    MNEditorField(label: "基准日期") { TextField("yyyy-MM-dd", text: $baseDate) }
+                    MNEditorField(label: "基准里程（km）") {
+                        TextField("0", text: $baseKm).keyboardType(.decimalPad)
+                    }
+                }
+                .padding(16)
+
+                if !isNew {
+                    Button(role: .destructive) {
+                        showDelete = true
+                    } label: {
+                        Text("删除提醒")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color.white)
+                            .cornerRadius(12)
+                    }
+                    .padding(.horizontal, 16)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                    .foregroundColor(MN.secondary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                Button("保存") { save(); dismiss() }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 12)
+                    .background(MN.primary)
+                    .cornerRadius(20)
+            }
+            .padding(12)
+            .background(Color.white)
+        }
+        .background(MN.surface)
+        .alert("确认删除？", isPresented: $showDelete) {
+            Button("删除", role: .destructive) {
+                store.deleteReminder(reminder.id)
+                dismiss()
+            }
+            Button("取消", role: .cancel) {}
+        }
+    }
+
+    private func save() {
+        let km = Double(intervalKm)
+        let months = Int(intervalMonths)
+        let kmValue = Double(baseKm) ?? 0
+
+        var saved = reminder
+        if saved.id.isEmpty { saved.id = UUID().uuidString }
+        saved.title = title.isEmpty ? "保养提醒" : title
+        saved.intervalKm = (km ?? 0) > 0 ? km : nil
+        saved.intervalMonths = (months ?? 0) > 0 ? months : nil
+        saved.baseKm = kmValue
+        saved.baseDate = baseDate
+        saved.done = false
+        saved.dueKm = (km ?? 0) > 0 ? kmValue + km! : nil
+        saved.dueDate = (months ?? 0) > 0 ? addMonths(to: baseDate, months: months!) : nil
+        saved.source = "自定义提醒"
+        store.upsertReminder(saved)
+    }
+}
+
 struct ServiceHistoryView: View {
     @EnvironmentObject var store: GarageStore
 
