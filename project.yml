@@ -26,10 +26,6 @@ targets:
     platform: iOS
     sources:
       - path: MileNote
-        excludes:
-          - Assets/Icons
-    resources:
-      - path: MileNote/Assets/Icons
     settings:
       PRODUCT_NAME: MileNote
       PRODUCT_BUNDLE_IDENTIFIER: com.selwiro.milenote.ios
