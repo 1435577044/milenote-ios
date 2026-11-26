@@ -1,0 +1,63 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild \
+            -project MileNote.xcodeproj \
+            -scheme MileNote \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            DEVELOPMENT_TEAM="" \
+            SWIFT_VERSION=5.0 \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find .build/Build/Products/Release-iphoneos -maxdepth 1 -type d -name 'MileNote.app' | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "MileNote.app not found"
+            exit 1
+          fi
+          rm -rf Payload MileNote-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload MileNote-unsigned.ipa
+          shasum -a 256 MileNote-unsigned.ipa > MileNote-unsigned.ipa.sha256
+          ls -lh MileNote-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MileNote-unsigned-IPA
+          path: |
+            MileNote-unsigned.ipa
+            MileNote-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
